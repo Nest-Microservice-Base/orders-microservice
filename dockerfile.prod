@@ -1,0 +1,67 @@
+# 1. Install Dependencies
+FROM node:21-alpine3.19 as deps
+
+WORKDIR /usr/src/app
+
+COPY package.json ./
+COPY package-lock.json ./
+
+RUN npm install
+
+
+
+# 2. Builder - Construye la app
+FROM node:21-alpine3.19 as build
+
+# Variable ORDERS_DATABASE_URL se recibe en proceso de construccion desde 
+# docker compose como argumento
+ARG ORDERS_DATABASE_URL
+# Se setea el valor del variable
+ENV DATABASE_URL=$ORDERS_DATABASE_URL
+
+
+WORKDIR /usr/src/app
+
+#  Copiar de deps, los módulos de node
+# source = deps
+COPY --from=deps /usr/src/app/node_modules ./node_modules
+
+# Copiar todo el codigo fuente de la app
+COPY . .
+
+# Exist db Y necesita realizar las migraciones
+RUN npx prisma migrate deploy
+# client prisma
+RUN npx prisma generate
+
+
+# RUN npm run test
+RUN npm run build
+
+# Usar solamanete lo modulos de produccion
+RUN npm ci -f --only=production && npm cache clean --force
+
+
+# 3. Crear imagen final de docker
+FROM node:21-alpine3.19 as prod
+
+WORKDIR /usr/src/app
+
+# Copiar los módulos de node
+# source= build
+COPY --from=build /usr/src/app/node_modules ./node_modules
+
+# Copiar la carpeta de DIST
+# source= build
+COPY --from=build /usr/src/app/dist ./dist
+COPY --from=build /usr/src/app/prisma ./prisma
+
+# Especificar ambiente de despliegue
+ENV NODE_ENV=production
+
+# User con permiso de ejecuccion
+USER node
+
+EXPOSE 3000
+
+CMD [ "node", "dist/main.js" ]
